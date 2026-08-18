@@ -31,7 +31,7 @@ contract L1BossBridge is Ownable, Pausable, ReentrancyGuard {
 
     IERC20 public immutable token;
     L1Vault public immutable vault;
-    mapping(address account => bool isSigner) public signers;
+    mapping(address account => bool isSigner) public signers; // 🧑‍✈️Access control🫆
 
     error L1BossBridge__DepositLimitReached();
     error L1BossBridge__Unauthorized();
@@ -43,7 +43,7 @@ contract L1BossBridge is Ownable, Pausable, ReentrancyGuard {
         token = _token;
         vault = new L1Vault(token);
         // Allows the bridge to move tokens out of the vault to facilitate withdrawals
-        vault.approveTo(address(this), type(uint256).max);
+        vault.approveTo(address(this), type(uint256).max); 
     }
 
     function pause() external onlyOwner {
@@ -61,14 +61,14 @@ contract L1BossBridge is Ownable, Pausable, ReentrancyGuard {
     /*
      * @notice Locks tokens in the vault and emits a Deposit event
      * the unlock event will trigger the L2 minting process. There are nodes listening
-     * for this event and will mint the corresponding tokens on L2. This is a centralized process.
+     * for this event and will mint the corresponding tokens on L2. This is a centralized process.🐞
      * 
      * @param from The address of the user who is depositing tokens
      * @param l2Recipient The address of the user who will receive the tokens on L2
      * @param amount The amount of tokens to deposit
      */
-    function depositTokensToL2(address from, address l2Recipient, uint256 amount) external whenNotPaused {
-        if (token.balanceOf(address(vault)) + amount > DEPOSIT_LIMIT) {
+    function depositTokensToL2(address from, address l2Recipient, uint256 amount) external whenNotPaused {  // 🕵️‍♂️Are we following CEI? 
+        if (token.balanceOf(address(vault)) + amount > DEPOSIT_LIMIT) { // 🕵️‍♂️ why are we including the balance to the amount? 🦋 Why are we considering it part of the deposit amount?
             revert L1BossBridge__DepositLimitReached();
         }
         token.safeTransferFrom(from, address(vault), amount);
@@ -80,7 +80,7 @@ contract L1BossBridge is Ownable, Pausable, ReentrancyGuard {
     /*
      * @notice This is the function responsible for withdrawing tokens from L2 to L1.
      * Our L2 will have a similar mechanism for withdrawing tokens from L1 to L2.
-     * @notice The signature is required to prevent replay attacks. 
+     * @notice The signature is required to prevent replay attacks. 🛡️
      * 
      * @param to The address of the user who will receive the tokens on L1
      * @param amount The amount of tokens to withdraw
@@ -98,7 +98,7 @@ contract L1BossBridge is Ownable, Pausable, ReentrancyGuard {
                 0, // value
                 abi.encodeCall(IERC20.transferFrom, (address(vault), to, amount))
             )
-        );
+        ); // Here we are..🤷‍♂️ ? Make me understand this line by line
     }
 
     /*
@@ -109,7 +109,7 @@ contract L1BossBridge is Ownable, Pausable, ReentrancyGuard {
      * @param s The s value of the signature
      * @param message The message/data to be sent to L1 (can be blank)
      */
-    function sendToL1(uint8 v, bytes32 r, bytes32 s, bytes memory message) public nonReentrant whenNotPaused {
+    function sendToL1(uint8 v, bytes32 r, bytes32 s, bytes memory message) public nonReentrant whenNotPaused { // 🕵️‍♂️ CEI?
         address signer = ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(keccak256(message)), v, r, s);
 
         if (!signers[signer]) {
